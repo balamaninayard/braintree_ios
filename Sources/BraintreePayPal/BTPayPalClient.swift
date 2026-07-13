@@ -218,6 +218,80 @@ import BraintreeDataCollector
         return try await tokenize(request: request)
     }
 
+    // MARK: - Fetch FI Methods
+
+    /// Fetches the sticky (default) funding instrument that PayPal will charge, for initial display.
+    ///
+    /// Uses the shared `fetchVaultedPaymentMethod` GraphQL query with the `STICKY_FI` discriminator. The
+    /// `paymentMethodIdJwt` is read internally from the client token used to initialize this client.
+    ///
+    /// - Parameter completion: Invoked with the parsed `BTPayPalFetchVaultPaymentMethod`, or `nil` when no FI
+    ///   is available; on network / GraphQL failure the error is returned so the caller can fall back.
+    public func fetchFI(
+        completion: @escaping (BTPayPalFetchVaultPaymentMethod?, Error?) -> Void
+    ) {
+        Task { @MainActor in
+            do {
+                let result = try await fetchFI()
+                completion(result, nil)
+            } catch {
+                completion(nil, error)
+            }
+        }
+    }
+
+    /// Fetches the sticky (default) funding instrument that PayPal will charge, for initial display.
+    ///
+    /// Uses the shared `fetchVaultedPaymentMethod` GraphQL query with the `STICKY_FI` discriminator. The
+    /// `paymentMethodIdJwt` is read internally from the client token used to initialize this client.
+    ///
+    /// - Returns: The parsed `BTPayPalFetchVaultPaymentMethod`, or `nil` when no FI is available.
+    /// - Throws: `BTPayPalError.missingPaymentMethodIDJWT` if the authorization is not a client token carrying a
+    ///   `paymentMethodIdJwt`, or an `Error` describing a network / GraphQL failure.
+    public func fetchFI() async throws -> BTPayPalFetchVaultPaymentMethod? {
+        guard let paymentMethodIDJWT = apiClient.authorization.paymentMethodIDJWT, !paymentMethodIDJWT.isEmpty else {
+            throw BTPayPalError.missingPaymentMethodIDJWT
+        }
+        let body = BTPayPalFetchVaultPaymentMethodGraphQLBody(paymentMethodIDJWT: paymentMethodIDJWT)
+        return try await fetchVaultedPaymentMethod(with: body)
+    }
+
+    /// Refetches the funding instrument after an edit, to refresh the displayed label.
+    ///
+    /// Uses the shared `fetchVaultedPaymentMethod` GraphQL query with the `FI_FROM_APPROVED_CHECKOUT`
+    /// discriminator.
+    ///
+    /// - Parameters:
+    ///   - orderID: The approved-checkout order id returned from the edit flow.
+    ///   - completion: Invoked with the parsed `BTPayPalFetchVaultPaymentMethod`, or `nil` when no FI is
+    ///   available; on failure the caller should keep the last-known label rather than fail the result.
+    public func refetchFI(
+        orderID: String,
+        completion: @escaping (BTPayPalFetchVaultPaymentMethod?, Error?) -> Void
+    ) {
+        Task { @MainActor in
+            do {
+                let result = try await refetchFI(orderID: orderID)
+                completion(result, nil)
+            } catch {
+                completion(nil, error)
+            }
+        }
+    }
+
+    /// Refetches the funding instrument after an edit, to refresh the displayed label.
+    ///
+    /// Uses the shared `fetchVaultedPaymentMethod` GraphQL query with the `FI_FROM_APPROVED_CHECKOUT`
+    /// discriminator.
+    ///
+    /// - Parameter orderID: The approved-checkout order id returned from the edit flow.
+    /// - Returns: The parsed `BTPayPalFetchVaultPaymentMethod`, or `nil` when no FI is available.
+    /// - Throws: An `Error` describing a network or GraphQL failure.
+    public func refetchFI(orderID: String) async throws -> BTPayPalFetchVaultPaymentMethod? {
+        let body = BTPayPalFetchVaultPaymentMethodGraphQLBody(orderID: orderID)
+        return try await fetchVaultedPaymentMethod(with: body)
+    }
+
     // MARK: - Internal Methods
     
     // swiftlint:disable function_body_length
@@ -519,6 +593,21 @@ import BraintreeDataCollector
         }
     }
     
+    /// The shared network layer for both FI reads: POSTs the GraphQL body on the SDK's existing GraphQL
+    /// rail and maps the response. GraphQL / HTTP errors are surfaced from `apiClient.post`; a `nil`
+    /// return indicates no FI (`data.fetchVaultedPaymentMethod` absent).
+    private func fetchVaultedPaymentMethod(
+        with body: BTPayPalFetchVaultPaymentMethodGraphQLBody
+    ) async throws -> BTPayPalFetchVaultPaymentMethod? {
+        let (responseBody, _) = try await apiClient.post("", parameters: body, httpType: .graphQLAPI)
+
+        guard let responseBody else {
+            return nil
+        }
+
+        return BTPayPalFetchVaultPaymentMethod(json: responseBody)
+    }
+
     private func getFundingSource(from request: BTPayPalRequest) -> BTPayPalFundingSource {
         if let checkoutRequest = request as? BTPayPalCheckoutRequest {
             if checkoutRequest.offerCredit { return .credit }

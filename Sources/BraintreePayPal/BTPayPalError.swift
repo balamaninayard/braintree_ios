@@ -48,6 +48,9 @@ public enum BTPayPalError: Error, CustomNSError, LocalizedError, Equatable {
     /// 14. Missing EC Token for App Switch
     case missingECToken
 
+    /// 15. The client token does not contain a `paymentMethodIdJwt`, required to fetch the vaulted funding instrument.
+    case missingPaymentMethodIDJWT
+
     public static var errorDomain: String {
         "com.braintreepayments.BTPayPalErrorDomain"
     }
@@ -84,6 +87,8 @@ public enum BTPayPalError: Error, CustomNSError, LocalizedError, Equatable {
             return 13
         case .missingECToken:
             return 14
+        case .missingPaymentMethodIDJWT:
+            return 15
         }
     }
 
@@ -121,6 +126,8 @@ public enum BTPayPalError: Error, CustomNSError, LocalizedError, Equatable {
             return "The PayPal Request was missing or invalid."
         case .missingECToken:
             return "Missing EC Token for PayPal App Switch."
+        case .missingPaymentMethodIDJWT:
+            return "The client token does not contain a paymentMethodIdJwt required to fetch the vaulted funding instrument."
         }
     }
 

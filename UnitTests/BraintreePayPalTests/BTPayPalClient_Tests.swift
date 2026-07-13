@@ -1897,7 +1897,190 @@ class BTPayPalClient_Tests: XCTestCase {
         
         let url = URL(string: "myapp://braintree-payments/braintreeAppSwitchPayPal/success?token=test")!
         XCTAssertFalse(BTPayPalClient.canHandleReturnURL(url))
-        
+
         BTPayPalClient.payPalClient = nil
+    }
+
+    // MARK: - fetchFI
+
+    func testFetchFI_postsStickyFIQueryToGraphQLAPI() async throws {
+        let mock = clientTokenMock(withPaymentMethodIDJWT: "fake-pmid-jwt")
+        mock.cannedResponseBody = BTJSON(value: fetchFISuccessResponse)
+        payPalClient.apiClient = mock
+
+        _ = try await payPalClient.fetchFI()
+
+        XCTAssertEqual(mock.lastPOSTPath, "")
+        XCTAssertEqual(mock.lastPOSTAPIClientHTTPType, .graphQLAPI)
+
+        let input = fetchVaultedInput(from: mock)
+        XCTAssertEqual(input?["fetchPaymentMethodType"] as? String, "STICKY_FI")
+        XCTAssertEqual(input?["paymentMethodIdJwt"] as? String, "fake-pmid-jwt")
+        XCTAssertEqual(input?["integrationChannel"] as? String, "BT_NATIVE_SDK")
+        XCTAssertNil(input?["orderId"])
+    }
+
+    func testFetchFI_whenSuccessful_returnsParsedInstrument() async throws {
+        let mock = clientTokenMock(withPaymentMethodIDJWT: "fake-pmid-jwt")
+        mock.cannedResponseBody = BTJSON(value: fetchFISuccessResponse)
+        payPalClient.apiClient = mock
+
+        let result = try await payPalClient.fetchFI()
+
+        XCTAssertEqual(result?.primaryInstrument?.label, "CREDIT UNION 1")
+        XCTAssertEqual(result?.primaryInstrument?.lastDigits, "3357")
+    }
+
+    func testFetchFI_whenDataIsNull_returnsNil() async throws {
+        let mock = clientTokenMock(withPaymentMethodIDJWT: "fake-pmid-jwt")
+        mock.cannedResponseBody = BTJSON(value: ["data": ["fetchVaultedPaymentMethod": NSNull()]] as [String: Any])
+        payPalClient.apiClient = mock
+
+        let result = try await payPalClient.fetchFI()
+
+        XCTAssertNil(result)
+    }
+
+    func testFetchFI_whenClientTokenMissingJWT_throwsMissingPaymentMethodIDJWT() async {
+        // setUp's mockAPIClient is initialized with a tokenization key, which carries no paymentMethodIdJwt
+        do {
+            _ = try await payPalClient.fetchFI()
+            XCTFail("Expected an error to be thrown")
+        } catch {
+            XCTAssertEqual(error as? BTPayPalError, .missingPaymentMethodIDJWT)
+        }
+
+        XCTAssertNil(mockAPIClient.lastPOSTAPIClientHTTPType, "Should not attempt a network request")
+    }
+
+    func testFetchFI_whenNetworkFails_throwsError() async {
+        let mock = clientTokenMock(withPaymentMethodIDJWT: "fake-pmid-jwt")
+        mock.cannedResponseError = NSError(domain: "com.test.error", code: 7)
+        payPalClient.apiClient = mock
+
+        do {
+            _ = try await payPalClient.fetchFI()
+            XCTFail("Expected an error to be thrown")
+        } catch {
+            XCTAssertEqual((error as NSError).domain, "com.test.error")
+        }
+    }
+
+    func testFetchFI_completionVariant_callsBackWithParsedResult() {
+        let mock = clientTokenMock(withPaymentMethodIDJWT: "fake-pmid-jwt")
+        mock.cannedResponseBody = BTJSON(value: fetchFISuccessResponse)
+        payPalClient.apiClient = mock
+
+        let expectation = expectation(description: "calls completion")
+        payPalClient.fetchFI { result, error in
+            XCTAssertNil(error)
+            XCTAssertEqual(result?.primaryInstrument?.label, "CREDIT UNION 1")
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: 2)
+    }
+
+    // MARK: - refetchFI
+
+    func testRefetchFI_postsApprovedCheckoutQueryToGraphQLAPI() async throws {
+        mockAPIClient.cannedResponseBody = BTJSON(value: fetchFISuccessResponse)
+
+        _ = try await payPalClient.refetchFI(orderID: "fake-order-id")
+
+        XCTAssertEqual(mockAPIClient.lastPOSTPath, "")
+        XCTAssertEqual(mockAPIClient.lastPOSTAPIClientHTTPType, .graphQLAPI)
+
+        let input = fetchVaultedInput(from: mockAPIClient)
+        XCTAssertEqual(input?["fetchPaymentMethodType"] as? String, "FI_FROM_APPROVED_CHECKOUT")
+        XCTAssertEqual(input?["orderId"] as? String, "fake-order-id")
+        XCTAssertEqual(input?["integrationChannel"] as? String, "BT_NATIVE_SDK")
+        XCTAssertNil(input?["paymentMethodIdJwt"])
+    }
+
+    func testRefetchFI_whenSuccessful_returnsParsedInstrument() async throws {
+        mockAPIClient.cannedResponseBody = BTJSON(value: fetchFISuccessResponse)
+
+        let result = try await payPalClient.refetchFI(orderID: "fake-order-id")
+
+        XCTAssertEqual(result?.primaryInstrument?.type, "BANK")
+    }
+
+    func testRefetchFI_whenDataIsNull_returnsNil() async throws {
+        mockAPIClient.cannedResponseBody = BTJSON(value: ["data": ["fetchVaultedPaymentMethod": NSNull()]] as [String: Any])
+
+        let result = try await payPalClient.refetchFI(orderID: "fake-order-id")
+
+        XCTAssertNil(result)
+    }
+
+    func testRefetchFI_whenNetworkFails_throwsError() async {
+        mockAPIClient.cannedResponseError = NSError(domain: "com.test.error", code: 7)
+
+        do {
+            _ = try await payPalClient.refetchFI(orderID: "fake-order-id")
+            XCTFail("Expected an error to be thrown")
+        } catch {
+            XCTAssertEqual((error as NSError).domain, "com.test.error")
+        }
+    }
+
+    func testRefetchFI_completionVariant_callsBackWithParsedResult() {
+        mockAPIClient.cannedResponseBody = BTJSON(value: fetchFISuccessResponse)
+
+        let expectation = expectation(description: "calls completion")
+        payPalClient.refetchFI(orderID: "fake-order-id") { result, error in
+            XCTAssertNil(error)
+            XCTAssertEqual(result?.primaryInstrument?.type, "BANK")
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: 2)
+    }
+
+    func testFetchFI_completionVariant_whenNetworkFails_callsBackWithError() {
+        let mock = clientTokenMock(withPaymentMethodIDJWT: "fake-pmid-jwt")
+        mock.cannedResponseError = NSError(domain: "com.test.error", code: 7)
+        payPalClient.apiClient = mock
+
+        let expectation = expectation(description: "calls completion with error")
+        payPalClient.fetchFI { result, error in
+            XCTAssertNil(result)
+            XCTAssertEqual((error as NSError?)?.domain, "com.test.error")
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: 2)
+    }
+
+    // MARK: - Fetch FI Helpers
+
+    private func clientTokenMock(withPaymentMethodIDJWT jwt: String) -> MockAPIClient {
+        let clientToken = TestClientTokenFactory.token(withVersion: 2, overrides: ["paymentMethodIdJwt": jwt])
+        return MockAPIClient(authorization: clientToken)
+    }
+
+    private func fetchVaultedInput(from mock: MockAPIClient) -> [String: Any]? {
+        let variables = mock.lastPOSTParameters?["variables"] as? [String: Any]
+        return variables?["input"] as? [String: Any]
+    }
+
+    private var fetchFISuccessResponse: [String: Any] {
+        [
+            "data": [
+                "fetchVaultedPaymentMethod": [
+                    "payer": NSNull(),
+                    "paymentMethods": [
+                        [
+                            "label": "CREDIT UNION 1",
+                            "imageUrl": "https://example.com/bank.png",
+                            "lastDigits": "3357",
+                            "type": "BANK",
+                            "subtype": NSNull()
+                        ]
+                    ]
+                ]
+            ]
+        ]
     }
 }

@@ -126,4 +126,20 @@ class BTClientToken_Tests: XCTestCase {
             XCTAssertEqual(error.localizedDescription, BTClientTokenError.invalidAuthorizationFingerprint.localizedDescription)
         }
     }
+
+    func testInitialization_whenClientTokenContainsPaymentMethodIDJWT_extractsIt() throws {
+        let clientToken = try XCTUnwrap(
+            BTClientToken(clientToken: TestClientTokenFactory.token(withVersion: 2, overrides: ["paymentMethodIdJwt": "fake-pmid-jwt"]))
+        )
+
+        XCTAssertEqual(clientToken.paymentMethodIDJWT, "fake-pmid-jwt")
+    }
+
+    func testInitialization_whenClientTokenHasNoPaymentMethodIDJWT_isNil() throws {
+        let clientToken = try XCTUnwrap(
+            BTClientToken(clientToken: TestClientTokenFactory.token(withVersion: 2))
+        )
+
+        XCTAssertNil(clientToken.paymentMethodIDJWT)
+    }
 }
